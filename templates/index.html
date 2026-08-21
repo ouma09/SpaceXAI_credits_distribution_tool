@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Credits link sender</title>
+  <style>
+    :root {
+      --bg: #f4efe6;
+      --ink: #1f1a14;
+      --muted: #6b6258;
+      --card: #fffdf8;
+      --line: #d9d0c3;
+      --accent: #b45309;
+      --ok: #166534;
+      --bad: #9f1239;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Georgia, sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.45;
+    }
+    main {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 2.5rem 1.25rem 4rem;
+    }
+    h1 { font-size: 1.8rem; margin: 0 0 0.35rem; }
+    p.lead { color: var(--muted); margin: 0 0 1.75rem; }
+    form.card, .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 1.25rem 1.35rem;
+      margin-bottom: 1rem;
+    }
+    label { display: block; font-weight: 600; margin: 0.9rem 0 0.35rem; }
+    input[type="file"], input[type="text"], input[type="email"], input[type="password"], textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0.6rem 0.7rem;
+      font: inherit;
+      background: #fff;
+    }
+    textarea { min-height: 160px; font-family: Consolas, monospace; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; }
+    .hint { color: var(--muted); font-size: 0.9rem; margin: 0.25rem 0 0; }
+    .actions { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 1.1rem; }
+    button, .btn {
+      border: 0;
+      border-radius: 8px;
+      padding: 0.65rem 1rem;
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-block;
+    }
+    button.primary { background: var(--ink); color: #fff; }
+    button.secondary { background: var(--accent); color: #fff; }
+    .btn { background: #ece4d6; color: var(--ink); }
+    .ok { color: var(--ok); font-weight: 600; }
+    .bad { color: var(--bad); font-weight: 600; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+    th, td { text-align: left; padding: 0.55rem 0.4rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.03em; }
+    td a { color: var(--accent); word-break: break-all; }
+    .stats { display: flex; gap: 1rem; flex-wrap: wrap; color: var(--muted); margin-bottom: 0.8rem; }
+    @media (max-width: 700px) { .row { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Credits link sender</h1>
+    <p class="lead">Upload a people CSV, add one unique link per person, preview the pairing, then send.</p>
+
+    {% if error %}<p class="bad">{{ error }}</p>{% endif %}
+    {% if message %}<p class="ok">{{ message }}</p>{% endif %}
+
+    <form class="card" method="post" enctype="multipart/form-data">
+      <label for="csv_file">People CSV</label>
+      <input id="csv_file" name="csv_file" type="file" accept=".csv,text/csv" required>
+      <p class="hint">Needs an <code>email</code> column. Luma exports work (<code>first_name</code>, <code>last_name</code>, <code>checked_in_at</code>).</p>
+
+      <label for="links_file">Links file (optional)</label>
+      <input id="links_file" name="links_file" type="file" accept=".txt,.csv,text/plain">
+
+      <label for="links">Or paste links, one per line</label>
+      <textarea id="links" name="links" placeholder="https://cursor.com/referral?code=XXXX">{{ links or "" }}</textarea>
+
+      <div class="row">
+        <div>
+          <label for="smtp_user">Gmail address</label>
+          <input id="smtp_user" name="smtp_user" type="email" placeholder="you@gmail.com" value="{{ request.form.smtp_user or '' }}">
+        </div>
+        <div>
+          <label for="mail_from">From address</label>
+          <input id="mail_from" name="mail_from" type="email" placeholder="same as Gmail if empty" value="{{ request.form.mail_from or '' }}">
+        </div>
+      </div>
+
+      <label for="smtp_pass">Gmail App Password</label>
+      <input id="smtp_pass" name="smtp_pass" type="password" autocomplete="off" placeholder="16-character app password">
+      <p class="hint">Needed only when you click Send. Create one at <a href="https://myaccount.google.com/apppasswords">Google App Passwords</a>.</p>
+
+      <label for="subject">Email subject</label>
+      <input id="subject" name="subject" type="text" value="{{ request.form.subject or 'Your unique link' }}">
+
+      <div class="actions">
+        <button class="primary" type="submit" formaction="/preview">Preview assignments</button>
+        <button class="secondary" type="submit" formaction="/send" onclick="return confirm('Send one unique link to each person now?')">Send emails</button>
+        <a class="btn" href="/assigned.csv">Download assigned.csv</a>
+        <a class="btn" href="/emails.csv">Download emails.csv</a>
+      </div>
+    </form>
+
+    {% if rows %}
+    <section class="card">
+      <div class="stats">
+        <span>{{ people_count }} people</span>
+        <span>{{ links_count }} links</span>
+        {% if extra_links %}<span>{{ extra_links }} unused extra link(s)</span>{% endif %}
+      </div>
+      <table>
+        <thead>
+          <tr><th>Name</th><th>Email</th><th>Link</th></tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+          <tr>
+            <td>{{ row.name }}</td>
+            <td>{{ row.email }}</td>
+            <td><a href="{{ row.link }}" target="_blank" rel="noopener">{{ row.link }}</a></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+    {% endif %}
+  </main>
+</body>
+</html>
