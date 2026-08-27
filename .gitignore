@@ -1,5 +1,6 @@
 *.csv
-links.txt
+*.txt
+!requirements.txt
 .env
 .env.local
 __pycache__/
