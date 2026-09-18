@@ -10,6 +10,8 @@ import smtplib
 import ssl
 import sys
 import time
+import html
+import re
 from dataclasses import dataclass
 from email.message import EmailMessage
 from pathlib import Path
@@ -49,6 +51,11 @@ def parse_args() -> argparse.Namespace:
         default="Your unique link",
         help="Email subject line",
     )
+    parser.add_argument(
+        "--body",
+        default="",
+        help="Email body. Use {name} and {link} as placeholders.",
+    )
     return parser.parse_args()
 
 
@@ -85,6 +92,37 @@ def parse_people_text(text: str) -> list[Person]:
     return people
 
 
+def parse_emails_text(text: str) -> list[Person]:
+    people: list[Person] = []
+    seen: set[str] = set()
+    for raw in text.splitlines():
+        line = raw.strip().strip(",")
+        if not line or line.startswith("#") or line.lower() == "email":
+            continue
+
+        first_name = ""
+        email = ""
+        if "<" in line and ">" in line:
+            name_part, rest = line.split("<", 1)
+            first_name = name_part.strip().strip('"')
+            email = rest.split(">", 1)[0].strip()
+        elif "," in line:
+            left, right = (part.strip() for part in line.split(",", 1))
+            if "@" in left:
+                email, first_name = left, right
+            elif "@" in right:
+                first_name, email = left, right
+        else:
+            email = line
+
+        email = email.strip().strip("<>")
+        if not email or "@" not in email or email.lower() in seen:
+            continue
+        seen.add(email.lower())
+        people.append(Person(email=email, first_name=first_name, last_name="", checked_in_at=""))
+    return people
+
+
 def parse_links_text(text: str) -> list[str]:
     links: list[str] = []
     seen: set[str] = set()
@@ -102,6 +140,10 @@ def parse_links_text(text: str) -> list[str]:
 def assign_pairs(people: list[Person], links: list[str]) -> list[tuple[Person, str]]:
     if not people:
         raise ValueError("No people found in the CSV.")
+    if not links:
+        raise ValueError("Add at least one link.")
+    if len(links) == 1:
+        return [(person, links[0]) for person in people]
     if len(links) < len(people):
         raise ValueError(
             f"Not enough links. Need {len(people)}, have {len(links)}."
@@ -140,23 +182,44 @@ def write_assignments(path: Path, pairs: list[tuple[Person, str]], append: bool 
             )
 
 
-def build_email(person: Person, link: str, subject: str, mail_from: str) -> EmailMessage:
+DEFAULT_BODY = (
+    "Hi {name},\n\n"
+    "Here is your unique link:\n"
+    "{link}\n\n"
+    "This link is only for you — please do not share it.\n"
+)
+
+
+def render_body(template: str, person: Person, link: str) -> str:
+    body = template or DEFAULT_BODY
+    return (
+        body.replace("{name}", person.display_name)
+        .replace("{link}", link)
+        .replace("{email}", person.email)
+    )
+
+
+def body_to_html(text: str) -> str:
+    escaped = html.escape(text)
+    escaped = re.sub(r"(https?://[^\s<]+)", r'<a href="\1">\1</a>', escaped)
+    parts = [part.replace("\n", "<br>") for part in escaped.split("\n\n")]
+    return "".join(f"<p>{part}</p>" for part in parts if part)
+
+
+def build_email(
+    person: Person,
+    link: str,
+    subject: str,
+    mail_from: str,
+    body: str = "",
+) -> EmailMessage:
+    plain = render_body(body, person, link)
     message = EmailMessage()
     message["From"] = mail_from
     message["To"] = person.email
     message["Subject"] = subject
-    message.set_content(
-        f"Hi {person.display_name},\n\n"
-        f"Here is your unique link:\n{link}\n\n"
-        "This link is only for you — please do not share it.\n"
-    )
-    message.add_alternative(
-        f"""<p>Hi {person.display_name},</p>
-<p>Here is your unique link:</p>
-<p><a href="{link}">{link}</a></p>
-<p>This link is only for you — please do not share it.</p>""",
-        subtype="html",
-    )
+    message.set_content(plain)
+    message.add_alternative(body_to_html(plain), subtype="html")
     return message
 
 
@@ -165,6 +228,7 @@ def send_emails(
     subject: str,
     delay: float,
     *,
+    body: str = "",
     user: str = "",
     password: str = "",
     mail_from: str = "",
@@ -195,7 +259,7 @@ def send_emails(
         smtp.login(user, password)
         for index, (person, link) in enumerate(pairs, start=1):
             try:
-                smtp.send_message(build_email(person, link, subject, mail_from))
+                smtp.send_message(build_email(person, link, subject, mail_from, body=body))
                 sent += 1
                 print(f"[{index}/{len(pairs)}] sent {person.email}")
             except Exception as exc:  # noqa: BLE001
@@ -221,7 +285,7 @@ def main() -> None:
             print("Dry run only. Re-run with --send to email this link.")
             return
         try:
-            sent, failed = send_emails(pairs, args.subject, args.delay)
+            sent, failed = send_emails(pairs, args.subject, args.delay, body=args.body)
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
         print(f"\nDone. Sent {sent}, failed {failed}.")
@@ -252,7 +316,7 @@ def main() -> None:
         return
 
     try:
-        sent, failed = send_emails(pairs, args.subject, args.delay)
+        sent, failed = send_emails(pairs, args.subject, args.delay, body=args.body)
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
     print(f"\nDone. Sent {sent}, failed {failed}.")

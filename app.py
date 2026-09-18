@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local web UI: upload a people CSV, paste links, preview, and send."""
+"""Local web UI: write an email, add recipients, add a credits link, preview, and send."""
 
 from __future__ import annotations
 
@@ -11,8 +11,10 @@ from flask import Flask, make_response, render_template, request
 from send_links import (
     DEFAULT_OUTPUT,
     assign_pairs,
+    parse_emails_text,
     parse_links_text,
     parse_people_text,
+    render_body,
     send_emails,
     write_assignments,
 )
@@ -27,20 +29,47 @@ def read_upload(field: str) -> str:
     return ""
 
 
-def build_pairs():
-    csv_text = read_upload("csv_file")
-    links_text = request.form.get("links", "")
-    links_file = read_upload("links_file")
-    if links_file:
-        links_text = f"{links_text}\n{links_file}"
+def form_state(**extra):
+    data = {
+        "emails": request.form.get("emails", ""),
+        "link": request.form.get("link", ""),
+        "subject": request.form.get("subject", ""),
+        "email_body": request.form.get("email_body", ""),
+        "smtp_user": request.form.get("smtp_user", ""),
+        "mail_from": request.form.get("mail_from", ""),
+        "error": None,
+        "message": None,
+        "rows": None,
+        "people_count": 0,
+        "preview_to": "",
+        "preview_subject": "",
+        "preview_body": "",
+    }
+    data.update(extra)
+    return render_template("index.html", **data)
 
-    if not csv_text.strip():
-        raise ValueError("Upload a CSV that includes an email column.")
-    people = parse_people_text(csv_text)
-    links = parse_links_text(links_text)
+
+def build_pairs():
+    emails_text = request.form.get("emails", "")
+    csv_text = read_upload("csv_file")
+    link_text = request.form.get("link", "")
+
+    if emails_text.strip():
+        people = parse_emails_text(emails_text)
+    elif csv_text.strip():
+        people = parse_people_text(csv_text)
+    else:
+        raise ValueError("Paste a list of emails, or upload a CSV.")
+
+    if not people:
+        raise ValueError("No valid email addresses found.")
+
+    links = parse_links_text(link_text)
+    if not links:
+        raise ValueError("Add the credits link.")
+
     pairs = assign_pairs(people, links)
-    extra = max(0, len(links) - len(people))
-    return people, links, pairs, extra
+    return people, links, pairs
 
 
 def pairs_as_rows(pairs):
@@ -54,82 +83,74 @@ def pairs_as_rows(pairs):
     ]
 
 
+def preview_payload(pairs, subject, email_body):
+    person, link = pairs[0]
+    return {
+        "rows": pairs_as_rows(pairs),
+        "people_count": len(pairs),
+        "preview_to": person.email,
+        "preview_subject": subject or "(no subject)",
+        "preview_body": render_body(email_body, person, link),
+    }
+
+
 @app.get("/")
 def index():
-    return render_template("index.html")
+    return form_state()
 
 
 @app.post("/preview")
 def preview():
+    subject = request.form.get("subject", "").strip()
+    email_body = request.form.get("email_body", "")
     try:
-        people, links, pairs, extra = build_pairs()
+        _people, _links, pairs = build_pairs()
     except ValueError as exc:
-        return render_template("index.html", error=str(exc), links=request.form.get("links", ""))
+        return form_state(error=str(exc))
 
     write_assignments(DEFAULT_OUTPUT, pairs)
-    return render_template(
-        "index.html",
-        rows=pairs_as_rows(pairs),
-        people_count=len(people),
-        links_count=len(links),
-        extra_links=extra,
-        links=request.form.get("links", ""),
-        message=f"Assigned {len(pairs)} unique links. Saved to assigned.csv.",
+    return form_state(
+        message=f"Ready to send to {len(pairs)} recipient(s). Check the preview below.",
+        **preview_payload(pairs, subject, email_body),
     )
 
 
 @app.post("/send")
 def send():
+    subject = request.form.get("subject", "").strip()
+    email_body = request.form.get("email_body", "")
     try:
-        people, links, pairs, extra = build_pairs()
+        _people, _links, pairs = build_pairs()
     except ValueError as exc:
-        return render_template("index.html", error=str(exc), links=request.form.get("links", ""))
+        return form_state(error=str(exc))
+
+    if not subject:
+        return form_state(error="Write an email subject.", **preview_payload(pairs, subject, email_body))
+    if not email_body.strip():
+        return form_state(error="Write the email body.", **preview_payload(pairs, subject, email_body))
 
     write_assignments(DEFAULT_OUTPUT, pairs)
     user = request.form.get("smtp_user", "").strip()
     password = request.form.get("smtp_pass", "").strip()
     mail_from = request.form.get("mail_from", "").strip() or user
-    subject = request.form.get("subject", "").strip() or "Your unique link"
+    extra = preview_payload(pairs, subject, email_body)
 
     try:
         sent, failed = send_emails(
             pairs,
             subject,
             0.8,
+            body=email_body,
             user=user,
             password=password,
             mail_from=mail_from,
         )
     except ValueError as exc:
-        return render_template(
-            "index.html",
-            error=str(exc),
-            rows=pairs_as_rows(pairs),
-            people_count=len(people),
-            links_count=len(links),
-            extra_links=extra,
-            links=request.form.get("links", ""),
-        )
+        return form_state(error=str(exc), **extra)
     except Exception as exc:  # noqa: BLE001
-        return render_template(
-            "index.html",
-            error=f"Send failed: {exc}",
-            rows=pairs_as_rows(pairs),
-            people_count=len(people),
-            links_count=len(links),
-            extra_links=extra,
-            links=request.form.get("links", ""),
-        )
+        return form_state(error=f"Send failed: {exc}", **extra)
 
-    return render_template(
-        "index.html",
-        rows=pairs_as_rows(pairs),
-        people_count=len(people),
-        links_count=len(links),
-        extra_links=extra,
-        links=request.form.get("links", ""),
-        message=f"Sent {sent} emails. Failed {failed}.",
-    )
+    return form_state(message=f"Sent {sent} emails. Failed {failed}.", **extra)
 
 
 @app.get("/assigned.csv")

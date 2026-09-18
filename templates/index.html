@@ -38,7 +38,7 @@
       margin-bottom: 1rem;
     }
     label { display: block; font-weight: 600; margin: 0.9rem 0 0.35rem; }
-    input[type="file"], input[type="text"], input[type="email"], input[type="password"], textarea {
+    input[type="file"], input[type="text"], input[type="email"], input[type="password"], input[type="url"], textarea {
       width: 100%;
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -47,6 +47,7 @@
       background: #fff;
     }
     textarea { min-height: 160px; font-family: Consolas, monospace; }
+    textarea#email_body { min-height: 220px; font-family: "Segoe UI", Georgia, sans-serif; }
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; }
     .hint { color: var(--muted); font-size: 0.9rem; margin: 0.25rem 0 0; }
     .actions { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 1.1rem; }
@@ -70,36 +71,50 @@
     th { color: var(--muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.03em; }
     td a { color: var(--accent); word-break: break-all; }
     .stats { display: flex; gap: 1rem; flex-wrap: wrap; color: var(--muted); margin-bottom: 0.8rem; }
+    .preview-box {
+      white-space: pre-wrap;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0.9rem 1rem;
+      font-family: "Segoe UI", Georgia, sans-serif;
+    }
+    details { margin-top: 0.8rem; }
+    details summary { cursor: pointer; color: var(--muted); font-weight: 600; }
     @media (max-width: 700px) { .row { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
   <main>
     <h1>Credits link sender</h1>
-    <p class="lead">Upload a people CSV, add one unique link per person, preview the pairing, then send.</p>
+    <p class="lead">Write the email yourself, paste the recipient list, add the credits link, preview, then send.</p>
 
     {% if error %}<p class="bad">{{ error }}</p>{% endif %}
     {% if message %}<p class="ok">{{ message }}</p>{% endif %}
 
     <form class="card" method="post" enctype="multipart/form-data">
-      <label for="csv_file">People CSV</label>
-      <input id="csv_file" name="csv_file" type="file" accept=".csv,text/csv" required>
-      <p class="hint">Needs an <code>email</code> column. Luma exports work (<code>first_name</code>, <code>last_name</code>, <code>checked_in_at</code>).</p>
+      <label for="emails">Recipient emails</label>
+      <textarea id="emails" name="emails" placeholder="one@email.com&#10;two@email.com">{{ emails or "" }}</textarea>
+      <p class="hint">One email per line. Optional: <code>email,Name</code> or <code>Name &lt;email&gt;</code>.</p>
 
-      <label for="links_file">Links file (optional)</label>
-      <input id="links_file" name="links_file" type="file" accept=".txt,.csv,text/plain">
+      <label for="link">Credits link</label>
+      <input id="link" name="link" type="url" placeholder="https://cursor.com/redeem/..." value="{{ link or '' }}">
 
-      <label for="links">Or paste links, one per line</label>
-      <textarea id="links" name="links" placeholder="https://cursor.com/referral?code=XXXX">{{ links or "" }}</textarea>
+      <label for="subject">Email subject</label>
+      <input id="subject" name="subject" type="text" placeholder="Your Cursor credits" value="{{ subject or '' }}">
+
+      <label for="email_body">Email body</label>
+      <textarea id="email_body" name="email_body" placeholder="Hi {name},&#10;&#10;Here is your credits link:&#10;{link}&#10;">{{ email_body or "" }}</textarea>
+      <p class="hint">Write the full email. Use <code>{link}</code> to insert the credits link, and <code>{name}</code> if you added names.</p>
 
       <div class="row">
         <div>
           <label for="smtp_user">Gmail address</label>
-          <input id="smtp_user" name="smtp_user" type="email" placeholder="you@gmail.com" value="{{ request.form.smtp_user or '' }}">
+          <input id="smtp_user" name="smtp_user" type="email" placeholder="you@gmail.com" value="{{ smtp_user or '' }}">
         </div>
         <div>
           <label for="mail_from">From address</label>
-          <input id="mail_from" name="mail_from" type="email" placeholder="same as Gmail if empty" value="{{ request.form.mail_from or '' }}">
+          <input id="mail_from" name="mail_from" type="email" placeholder="same as Gmail if empty" value="{{ mail_from or '' }}">
         </div>
       </div>
 
@@ -107,23 +122,35 @@
       <input id="smtp_pass" name="smtp_pass" type="password" autocomplete="off" placeholder="16-character app password">
       <p class="hint">Needed only when you click Send. Create one at <a href="https://myaccount.google.com/apppasswords">Google App Passwords</a>.</p>
 
-      <label for="subject">Email subject</label>
-      <input id="subject" name="subject" type="text" value="{{ request.form.subject or 'Your unique link' }}">
+      <details>
+        <summary>Or upload a people CSV</summary>
+        <label for="csv_file">People CSV</label>
+        <input id="csv_file" name="csv_file" type="file" accept=".csv,text/csv">
+        <p class="hint">Optional. Needs an <code>email</code> column. Used only if the recipient box above is empty.</p>
+      </details>
 
       <div class="actions">
-        <button class="primary" type="submit" formaction="/preview">Preview assignments</button>
-        <button class="secondary" type="submit" formaction="/send" onclick="return confirm('Send one unique link to each person now?')">Send emails</button>
+        <button class="primary" type="submit" formaction="/preview">Preview email</button>
+        <button class="secondary" type="submit" formaction="/send" onclick="return confirm('Send this email to everyone on the list now?')">Send emails</button>
         <a class="btn" href="/assigned.csv">Download assigned.csv</a>
         <a class="btn" href="/emails.csv">Download emails.csv</a>
       </div>
     </form>
 
+    {% if preview_body %}
+    <section class="card">
+      <h2 style="margin: 0 0 0.6rem; font-size: 1.15rem;">Email preview</h2>
+      <p class="hint">This is the email that will be sent. Placeholders are filled for the first recipient.</p>
+      <p><strong>To:</strong> {{ preview_to }}{% if people_count > 1 %} and {{ people_count - 1 }} other(s){% endif %}</p>
+      <p><strong>Subject:</strong> {{ preview_subject }}</p>
+      <div class="preview-box">{{ preview_body }}</div>
+    </section>
+    {% endif %}
+
     {% if rows %}
     <section class="card">
       <div class="stats">
-        <span>{{ people_count }} people</span>
-        <span>{{ links_count }} links</span>
-        {% if extra_links %}<span>{{ extra_links }} unused extra link(s)</span>{% endif %}
+        <span>{{ people_count }} recipient(s)</span>
       </div>
       <table>
         <thead>
